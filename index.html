@@ -433,20 +433,36 @@ function resizeCanvas(canvas) {
   return {ctx, width: rect.width, height: rect.height};
 }
 
+// remembers the y-axis scale so the labels do not flicker
+const chartScale = {ticker: "", range: 0, t: 0, min: 0, max: 1};
+let labelState = {t: 0, ticker: "", price: 0};
+
 function drawChart() {
   const canvas = document.getElementById("priceChart");
   const {ctx, width, height} = resizeCanvas(canvas);
   ctx.clearRect(0, 0, width, height);
 
-  const data = chartPoints[selectedTicker].slice(-chartRange);
+  // history + the live price as the final point (so the right end moves every frame)
+  const hist = chartPoints[selectedTicker].slice(-(chartRange + 2));
+  const data = hist.concat(stocks[selectedTicker].price);
   if (data.length < 2) return;
 
   let minData = Infinity, maxData = -Infinity;
   for (const v of data) { if (v < minData) minData = v; if (v > maxData) maxData = v; }
 
-  const padding = (maxData - minData) * 0.12 || Math.max(maxData * 0.002, 0.05);
-  const min = minData - padding;
-  const max = maxData + padding;
+  const now = performance.now();
+  const sc = chartScale;
+  if (sc.ticker !== selectedTicker || sc.range !== chartRange ||
+      now - sc.t > 1000 || minData < sc.min || maxData > sc.max) {
+    const padding = (maxData - minData) * 0.12 || Math.max(maxData * 0.002, 0.05);
+    sc.min = minData - padding;
+    sc.max = maxData + padding;
+    sc.t = now;
+    sc.ticker = selectedTicker;
+    sc.range = chartRange;
+  }
+  const min = sc.min;
+  const max = sc.max;
   const range = max - min;
 
   const left = 62, right = 15, top = 15, bottom = 28;
@@ -456,7 +472,7 @@ function drawChart() {
   // grid + price labels
   ctx.strokeStyle = "#eceff2";
   ctx.lineWidth = 1;
-  ctx.font = "10px Inter, sans-serif";
+  ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
   ctx.fillStyle = "#8a929c";
 
   for (let i = 0; i < 5; i++) {
@@ -471,34 +487,54 @@ function drawChart() {
   ctx.fillText("PAST", left, height - 8);
   ctx.fillText("NOW", width - 37, height - 8);
 
-  // price line
-  const points = data.map((v, i) => ({
-    x: left + (i / (data.length - 1)) * chartWidth,
-    y: top + (1 - (v - min) / range) * chartHeight
-  }));
+  // price line: the newest point sits at the right edge; older points
+  // slide left smoothly as time passes between samples
+  const step = chartWidth / chartRange;
+  const frac = Math.min(sampleTimer / 0.5, 1);
+  const n = data.length;
+  const points = data.map((v, i) => {
+    const k = n - 1 - i;   // 0 = live point
+    return {
+      x: left + chartWidth - (k === 0 ? 0 : (frac + k - 1) * step),
+      y: top + (1 - (v - min) / range) * chartHeight
+    };
+  });
 
   const current = stocks[selectedTicker].price;
   const lineColor = current >= sessionStart[selectedTicker] ? "#087f5b" : "#c92a3d";
 
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(left, 0, chartWidth - 14, height);   // cut the line off 14px before the live end
+  ctx.clip();
   ctx.beginPath();
   points.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
   ctx.strokeStyle = lineColor;
   ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
   ctx.stroke();
+  ctx.restore();
 
-  // dashed current-price line
-  const last = points[points.length - 1];
+  // price tag: its value only refreshes 4 times a second so it is readable
+  if (now - labelState.t > 250 || labelState.ticker !== selectedTicker) {
+    labelState = {t: now, ticker: selectedTicker, price: current};
+  }
+  let ly = top + (1 - (labelState.price - min) / range) * chartHeight;
+  ly = Math.max(top + 10, Math.min(top + chartHeight - 4, ly));
+
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
-  ctx.moveTo(last.x, last.y);
-  ctx.lineTo(width - right, last.y);
+  ctx.moveTo(left + chartWidth - 14, ly);
+  ctx.lineTo(width - right, ly);
   ctx.stroke();
   ctx.setLineDash([]);
 
   ctx.fillStyle = lineColor;
-  ctx.font = "600 10px Inter, sans-serif";
-  ctx.fillText(money(current), width - 62, last.y - 7);
+  ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+  ctx.textAlign = "right";
+  ctx.fillText(money(labelState.price), width - right, ly - 6);
+  ctx.textAlign = "left";
 }
 
 function changeRange(range, button) {
@@ -600,36 +636,41 @@ function saveGame() {
     sessionStart,
     chartPoints
   };
-  try { localStorage.setItem("exchange-simulator", JSON.stringify(data)); } catch {}
+  try { localStorage.setItem("exchange-simulator-v2", JSON.stringify(data)); } catch {}
 }
 
 function loadGame() {
   let data;
   try {
-    const saved = localStorage.getItem("exchange-simulator");
+    const saved = localStorage.getItem("exchange-simulator-v2");
     if (!saved) return;
     data = JSON.parse(saved);
   } catch { return; }
 
   try {
-    cash = Number(data.cash) || cash;
-    currentDay = Number(data.currentDay) || currentDay;
-    marketSeconds = Number(data.marketSeconds) || 0;
-    marketIndex = Number(data.marketIndex) || marketIndex;
-    dayStartValue = Number(data.dayStartValue) || dayStartValue;
+    const ok = v => Number.isFinite(v) && v > 0;
+    if (ok(data.cash)) cash = data.cash;
+    if (ok(data.currentDay)) currentDay = data.currentDay;
+    if (Number.isFinite(data.marketSeconds) && data.marketSeconds >= 0) marketSeconds = data.marketSeconds;
+    if (ok(data.marketIndex)) marketIndex = data.marketIndex;
+    if (ok(data.dayStartValue)) dayStartValue = data.dayStartValue;
 
     for (const t in data.stocks || {}) {
       if (!stocks[t]) continue;
-      stocks[t].price = data.stocks[t].price;
-      stocks[t].shares = data.stocks[t].shares;
-      sessionStart[t] = sessionHigh[t] = sessionLow[t] = stocks[t].price;
+      const d = data.stocks[t];
+      if (ok(d.price)) {
+        stocks[t].price = d.price;
+        sessionStart[t] = sessionHigh[t] = sessionLow[t] = d.price;
+      }
+      if (Number.isInteger(d.shares) && d.shares >= 0) stocks[t].shares = d.shares;
     }
     for (const t in data.sessionStart || {}) {
-      if (stocks[t]) sessionStart[t] = data.sessionStart[t];
+      if (stocks[t] && ok(data.sessionStart[t])) sessionStart[t] = data.sessionStart[t];
     }
     for (const t in data.chartPoints || {}) {
-      if (chartPoints[t] && Array.isArray(data.chartPoints[t]) && data.chartPoints[t].length > 1) {
-        chartPoints[t] = data.chartPoints[t];
+      const arr = data.chartPoints[t];
+      if (chartPoints[t] && Array.isArray(arr) && arr.length > 1 && arr.every(ok)) {
+        chartPoints[t] = arr;
       }
     }
   } catch {
@@ -649,7 +690,10 @@ function showToast(message) {
 
 /* ===== MAIN LOOP ===== */
 function animationLoop(timestamp) {
-  const dt = Math.min((timestamp - lastFrameTime) / 1000, 0.1);
+  // FIX: dt must never be negative (sqrt of a negative = NaN = no line)
+  let dt = (timestamp - lastFrameTime) / 1000;
+  if (!(dt > 0)) dt = 0.016;
+  dt = Math.min(dt, 0.1);
   lastFrameTime = timestamp;
 
   updateMarket(dt);
@@ -660,7 +704,7 @@ function animationLoop(timestamp) {
 
   // text updates ~12 times per second is plenty
   uiUpdateTimer += dt;
-  if (uiUpdateTimer >= 0.08) {
+  if (uiUpdateTimer >= 0.2) {
     uiUpdateTimer = 0;
     updateSelectedStockUI();
     updatePortfolioUI();
@@ -691,3 +735,4 @@ window.addEventListener("resize", drawChart);
 requestAnimationFrame(animationLoop);
 </script>
 </body>
+</html>
