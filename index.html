@@ -85,6 +85,16 @@ button{cursor:pointer}
 .event-bar.visible{display:block}
 .toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,15px);background:#202833;color:#fff;padding:10px 14px;font-size:11px;opacity:0;pointer-events:none;transition:.2s ease;z-index:50}
 .toast.visible{opacity:1;transform:translate(-50%,0)}
+.speed-buttons{display:flex;gap:4px}
+.speed-button{background:transparent;border:1px solid #3a4655;color:#cbd2d9;padding:4px 9px;font-size:11px}
+.speed-button.active{background:#fff;color:var(--navy)}
+.max-button{border:1px solid var(--border-dark);background:var(--alt);padding:4px 9px;font-size:10px;font-weight:700;margin-left:8px}
+.pnl{font-variant-numeric:tabular-nums}
+.trade-feed{max-height:220px;overflow-y:auto}
+.trade-row{display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid #edf0f3;font-size:11px}
+.trade-row small{color:var(--muted);display:block;margin-top:3px;font-size:9px}
+.topselect{background:transparent;color:#cbd2d9;border:1px solid #3a4655;padding:4px 6px;font-size:11px}
+.topselect option{color:#000}
 @media(max-width:1100px){.workspace{grid-template-columns:230px minmax(360px,1fr)}.right-column{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr}}
 @media(max-width:760px){.page{padding:12px}.topbar{padding:0 14px}.market-strip{grid-template-columns:1fr 1fr}.market-stat:nth-child(2){border-right:0}.market-stat:nth-child(-n+2){border-bottom:1px solid var(--border)}.workspace{grid-template-columns:1fr}.watchlist{max-height:300px}.right-column{display:flex}.chart-container{height:270px}.simulation-label{display:none}}
 </style>
@@ -94,6 +104,16 @@ button{cursor:pointer}
 <header class="topbar">
   <div class="brand"><div class="brand-mark">EX</div>EXCHANGE</div>
   <div class="topbar-right">
+    <div class="speed-buttons">
+      <button class="speed-button" onclick="setSpeed(0,this)">Pause</button>
+      <button class="speed-button active" onclick="setSpeed(1,this)">1x</button>
+      <button class="speed-button" onclick="setSpeed(2,this)">2x</button>
+      <button class="speed-button" onclick="setSpeed(5,this)">5x</button>
+    </div>
+    <select id="difficulty" class="topselect" onchange="setDifficulty(this.value)" title="Difficulty">
+      <option value="0.6">Calm</option><option value="1" selected>Normal</option><option value="1.6">Wild</option>
+    </select>
+    <button class="speed-button" id="soundButton" onclick="toggleSound()">Sound: on</button>
     <div class="simulation-label">SIMULATION</div>
     <div id="clock">DAY 1 · 09:30:00</div>
   </div>
@@ -104,7 +124,7 @@ button{cursor:pointer}
     <div class="market-stat"><div class="market-label">Portfolio value</div><div class="market-value" id="portfolioValue">$100,000.00</div><div class="market-change" id="portfolioChange">+$0.00 · 0.00%</div></div>
     <div class="market-stat"><div class="market-label">Cash available</div><div class="market-value" id="cashValue">$100,000.00</div><div class="market-change" style="color:var(--muted)">Buying power</div></div>
     <div class="market-stat"><div class="market-label">Total return</div><div class="market-value" id="returnValue">$0.00</div><div class="market-change" id="returnChange">0.00%</div></div>
-    <div class="market-stat"><div class="market-label">Exchange index</div><div class="market-value" id="indexValue">4,250.00</div><div class="market-change" id="indexChange">0.00%</div></div>
+    <div class="market-stat"><div class="market-label">Exchange index</div><div class="market-value" id="indexValue">4,250.00</div><div class="market-change" id="indexChange">0.00%</div><div class="market-change" id="goalLine" style="color:var(--muted)"></div></div>
   </section>
 
   <div class="event-bar" id="eventBar"></div>
@@ -151,14 +171,16 @@ button{cursor:pointer}
           <button class="order-tab" id="sellTab" onclick="setOrderSide('sell')">Sell</button>
         </div>
         <div class="field-label">Number of shares</div>
-        <div class="input-box"><input id="sharesInput" type="number" min="1" value="10" oninput="updateOrderSummary()"></div>
+        <div class="input-box"><input id="sharesInput" type="number" min="1" value="10" oninput="updateOrderSummary()"><button class="max-button" onclick="setMaxShares()">Max</button></div>
         <div class="order-summary">
           <div class="summary-line"><span>Last price</span><strong id="orderPrice">$0.00</strong></div>
           <div class="summary-line"><span>Shares</span><strong id="orderShares">10</strong></div>
           <div class="summary-line"><span>Estimated value</span><strong id="orderTotal">$0.00</strong></div>
+          <div class="summary-line"><span>Fee (0.1%)</span><strong id="orderFee">$0.00</strong></div>
         </div>
         <button class="primary-button buy" id="tradeButton" onclick="executeTrade()">Buy NVD</button>
         <button class="advance-button" onclick="advanceDay()">Advance trading day</button>
+        <button class="advance-button" id="resetButton" onclick="resetGame()">Reset game</button>
       </div>
     </section>
 
@@ -166,6 +188,10 @@ button{cursor:pointer}
       <div class="panel">
         <div class="panel-titlebar"><div class="panel-title">Positions</div><div class="panel-secondary">Portfolio</div></div>
         <div id="positions"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-titlebar"><div class="panel-title">Trade history</div><div class="panel-secondary">Recent</div></div>
+        <div class="trade-feed" id="tradeHistory"></div>
       </div>
       <div class="panel">
         <div class="panel-titlebar"><div class="panel-title">Market news</div><div class="panel-secondary">Latest</div></div>
@@ -201,6 +227,14 @@ let marketIndex = 4250;
 let chartRange = 120;        // number of chart points (2 points per second)
 let lastFrameTime = performance.now();
 let uiUpdateTimer = 0, newsTimer = 0, eventTimer = 0, sampleTimer = 0;
+let speed = 1, resetting = false, resetArmed = false;
+const FEE_RATE = 0.001;          // 0.1% fee on every trade
+const GOAL_DAYS = 10;            // goal: beat the index within 10 days
+let goalDone = false;
+let volMult = 1;                 // difficulty: 0.6 calm, 1 normal, 1.6 wild
+let soundOn = true, audioCtx = null;
+let hoverX = null;               // mouse position over the chart
+const trades = [];   // newest first
 let dayStartValue = startingCapital;   // FIX: portfolio change is measured from day start
 
 const chartPoints = {}, sessionStart = {}, sessionHigh = {}, sessionLow = {};
@@ -224,6 +258,7 @@ function signedMoney(v)   { return (v >= 0 ? "+" : "") + money(v); }
 /* ===== STARTING HISTORY ===== */
 for (const t in stocks) {
   chartPoints[t] = [];
+  stocks[t].cost = 0;   // total money spent on the shares you hold
   let p = stocks[t].price;
   for (let i = 0; i < 780; i++) {
     // FIX: same step size as the live engine (one point = 0.5 seconds)
@@ -304,7 +339,7 @@ function updateMarket(dt) {
 
   for (const t in stocks) {
     const s = stocks[t];
-    const movement = randn() * s.volatility * Math.sqrt(dt) + marketNoise * s.beta + s.drift * dt;
+    const movement = randn() * s.volatility * volMult * Math.sqrt(dt) + marketNoise * s.beta + s.drift * dt;
     s.price = Math.max(1, s.price * Math.exp(movement));
     sessionHigh[t] = Math.max(sessionHigh[t], s.price);
     sessionLow[t]  = Math.min(sessionLow[t], s.price);
@@ -342,6 +377,7 @@ function updateOrderSummary() {
   document.getElementById("orderPrice").textContent  = money(price);
   document.getElementById("orderShares").textContent = number(shares, 0);
   document.getElementById("orderTotal").textContent  = money(shares * price);
+  document.getElementById("orderFee").textContent    = money(shares * price * FEE_RATE);
 }
 
 function executeTrade() {
@@ -352,17 +388,23 @@ function executeTrade() {
 
   const price = stock.price;
   const total = price * shares;
+  const fee = total * FEE_RATE;
 
   if (orderSide === "buy") {
-    if (total > cash) { showToast("Insufficient cash."); return; }
-    cash -= total;
+    if (total + fee > cash) { showToast("Insufficient cash."); return; }
+    cash -= total + fee;
     stock.shares += shares;
+    stock.cost += total + fee;
     showToast(`Bought ${shares} ${selectedTicker} at ${money(price)}`);
+    addTrade("BUY", selectedTicker, shares, price);
   } else {
     if (shares > stock.shares) { showToast("You do not own enough shares."); return; }
-    cash += total;
+    cash += total - fee;
+    stock.cost -= (stock.cost / stock.shares) * shares;   // remove the cost of the shares sold
     stock.shares -= shares;
+    if (stock.shares === 0) stock.cost = 0;
     showToast(`Sold ${shares} ${selectedTicker} at ${money(price)}`);
+    addTrade("SELL", selectedTicker, shares, price);
   }
 
   updatePortfolioUI();
@@ -380,11 +422,131 @@ function renderPositions() {
     return;
   }
 
-  container.innerHTML = holdings.map(([t, s]) => `
+  container.innerHTML = holdings.map(([t, s]) => {
+    const value = s.price * s.shares;
+    const pnl = value - s.cost;
+    const pct = s.cost > 0 ? pnl / s.cost * 100 : 0;
+    return `
     <div class="position-row">
-      <div class="position-top"><span>${t}</span><span>${money(s.price * s.shares)}</span></div>
-      <div class="position-bottom"><span>${number(s.shares, 0)} shares</span><span>${money(s.price)}</span></div>
+      <div class="position-top"><span>${t}</span><span>${money(value)}</span></div>
+      <div class="position-bottom"><span>${number(s.shares, 0)} shares @ ${money(s.cost / s.shares)}</span><span>${money(s.price)}</span></div>
+      <div class="position-bottom"><span>Profit / loss</span><span class="pnl ${pnl >= 0 ? "up" : "down"}">${signedMoney(pnl)} (${signedPercent(pct)})</span></div>
+    </div>`;
+  }).join("");
+}
+
+/* ===== TRADE HISTORY ===== */
+function addTrade(side, ticker, shares, price) {
+  trades.unshift({side, ticker, shares, price, when: `Day ${currentDay} · ${formatGameTime().slice(0, 5)}`});
+  if (trades.length > 30) trades.pop();
+  renderTrades();
+  playTone(side === "BUY" ? 660 : 440);
+}
+
+function renderTrades() {
+  const box = document.getElementById("tradeHistory");
+  if (!trades.length) {
+    box.innerHTML = `<div class="empty-state">No trades yet.</div>`;
+    return;
+  }
+  box.innerHTML = trades.map(t => `
+    <div class="trade-row">
+      <div><strong class="${t.side === "BUY" ? "up" : "down"}">${t.side}</strong> ${number(t.shares, 0)} ${t.ticker}<small>${t.when}</small></div>
+      <div>${money(t.price)}</div>
     </div>`).join("");
+}
+
+/* ===== MAX BUTTON, SPEED, RESET ===== */
+function setMaxShares() {
+  const stock = stocks[selectedTicker];
+  const max = orderSide === "buy" ? Math.floor(cash / (stock.price * (1 + FEE_RATE))) : stock.shares;
+  document.getElementById("sharesInput").value = max;
+  updateOrderSummary();
+}
+
+function setSpeed(value, button) {
+  speed = value;
+  document.querySelectorAll(".speed-button").forEach(b => b.classList.remove("active"));
+  button.classList.add("active");
+}
+
+function resetGame() {
+  const btn = document.getElementById("resetButton");
+  if (!resetArmed) {   // first click: ask for a second click (no pop-up needed)
+    resetArmed = true;
+    btn.textContent = "Click again to confirm reset";
+    setTimeout(() => { resetArmed = false; btn.textContent = "Reset game"; }, 3000);
+    return;
+  }
+  resetting = true;   // stops the auto-save from saving again
+  try { localStorage.removeItem("exchange-simulator-v2"); } catch {}
+  location.reload();
+}
+
+/* ===== COMPANY NEWS (moves ONE stock) ===== */
+const goodNews = ["wins a major contract", "beats earnings expectations", "announces a breakthrough product", "raises its yearly forecast"];
+const badNews  = ["misses earnings expectations", "recalls a product", "loses a key customer", "cuts its yearly forecast"];
+
+function companyNews() {
+  const tickers = Object.keys(stocks);
+  const t = tickers[Math.floor(Math.random() * tickers.length)];
+  const good = Math.random() < 0.5;
+  const list = good ? goodNews : badNews;
+  const text = list[Math.floor(Math.random() * list.length)];
+  const move = (0.02 + Math.random() * 0.04) * (good ? 1 : -1);   // 2% to 6%
+  stocks[t].price *= 1 + move;
+  addNews(`${t} ${good ? "▲" : "▼"}`, `${stocks[t].name} ${text}. Shares ${good ? "jump" : "fall"} ${Math.abs(move * 100).toFixed(1)}%.`);
+}
+
+/* ===== DIVIDENDS ===== */
+function payDividends() {
+  let total = 0;
+  for (const t in stocks) total += stocks[t].shares * stocks[t].price * 0.005;   // 0.5% of share price
+  if (total > 0) {
+    cash += total;
+    addNews("DIVIDENDS", `Companies paid dividends. You received ${money(total)}.`);
+  } else {
+    addNews("DIVIDENDS", "Companies paid dividends today. Own some shares to receive them.");
+  }
+}
+
+/* ===== GOAL ===== */
+function showBanner(html, ms) {
+  const bar = document.getElementById("eventBar");
+  bar.innerHTML = html;
+  bar.classList.add("visible");
+  setTimeout(() => bar.classList.remove("visible"), ms);
+}
+
+function finishGoal() {
+  goalDone = true;
+  const me = (getPortfolioValue() / startingCapital - 1) * 100;
+  const idx = (marketIndex / 4250 - 1) * 100;
+  const msg = `Your return ${signedPercent(me)} vs index ${signedPercent(idx)}.`;
+  showBanner(`<strong>${me > idx ? "You beat the market!" : "The market won this time."}</strong> ${msg} Keep playing, or reset to try again.`, 15000);
+  addNews("GOAL COMPLETE", msg);
+}
+
+/* ===== DIFFICULTY AND SOUND ===== */
+function setDifficulty(v) { volMult = Number(v); }
+
+function toggleSound() {
+  soundOn = !soundOn;
+  document.getElementById("soundButton").textContent = "Sound: " + (soundOn ? "on" : "off");
+}
+
+function playTone(freq) {
+  if (!soundOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+    osc.frequency.value = freq;
+    gain.gain.value = 0.05;
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.12);
+  } catch {}
 }
 
 /* ===== PORTFOLIO UI ===== */
@@ -413,6 +575,10 @@ function updateIndexUI() {
   const el = document.getElementById("indexChange");
   el.textContent = signedPercent(change);
   el.className = "market-change " + (change >= 0 ? "up" : "down");
+  const myRet = (getPortfolioValue() / startingCapital - 1) * 100;
+  document.getElementById("goalLine").textContent = goalDone
+    ? "Goal finished"
+    : `Goal: beat index · Day ${currentDay}/${GOAL_DAYS} · ${signedPercent(myRet - change)} vs index`;
 }
 
 /* ===== CHART ===== */
@@ -535,6 +701,29 @@ function drawChart() {
   ctx.textAlign = "right";
   ctx.fillText(money(labelState.price), width - right, ly - 6);
   ctx.textAlign = "left";
+
+  // hover: crosshair + exact price
+  if (hoverX !== null && hoverX > left && hoverX < left + chartWidth - 14) {
+    let best = -1, bd = 1e9;
+    points.forEach((p, i) => { const d = Math.abs(p.x - hoverX); if (p.x >= left && d < bd) { bd = d; best = i; } });
+    if (best > 0 && best < n - 1) {
+      const p = points[best];
+      ctx.strokeStyle = "#9aa3ad";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(p.x, top); ctx.lineTo(p.x, top + chartHeight); ctx.stroke();
+      ctx.fillStyle = lineColor;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2); ctx.fill();
+      const ago = ((frac + (n - 1 - best) - 1) * 0.5).toFixed(0);
+      const txt = `${money(data[best])}  ·  ${ago} min ago`;
+      ctx.font = "600 10px ui-monospace, Menlo, Consolas, monospace";
+      const w = ctx.measureText(txt).width + 12;
+      const bx = Math.min(Math.max(p.x - w / 2, left), left + chartWidth - w);
+      ctx.fillStyle = "#202833";
+      ctx.fillRect(bx, top, w, 18);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(txt, bx + 6, top + 12);
+    }
+  }
 }
 
 function changeRange(range, button) {
@@ -568,6 +757,7 @@ function maybeGenerateNews(dt) {
   newsTimer += dt;
   if (newsTimer < 35 + Math.random() * 25) return;
   newsTimer = 0;
+  if (Math.random() < 0.55) { companyNews(); return; }   // news about ONE company
   const a = newsTemplates[Math.floor(Math.random() * newsTemplates.length)];
   addNews(a[0], a[1]);
 }
@@ -582,7 +772,7 @@ const events = [
 
 function maybeMarketEvent(dt) {
   eventTimer += dt;
-  if (eventTimer < 65 + Math.random() * 100) return;
+  if (eventTimer < (65 + Math.random() * 100) / volMult) return;
   eventTimer = 0;
 
   const ev = events[Math.floor(Math.random() * events.length)];
@@ -618,7 +808,12 @@ function checkTradingDay() {
 function advanceDay() {
   currentDay++;
   marketSeconds = 0;
-  dayStartValue = getPortfolioValue();   // FIX: new day, new starting value
+  // overnight gap: prices open a little different from yesterday's close
+  for (const t in stocks) {
+    stocks[t].price = Math.max(1, stocks[t].price * Math.exp(randn() * 0.006 * volMult * stocks[t].beta));
+  }
+  if (currentDay % 5 === 0) payDividends();   // dividends every 5th day
+  dayStartValue = getPortfolioValue();
 
   for (const t in stocks) {
     sessionStart[t] = sessionHigh[t] = sessionLow[t] = stocks[t].price;
@@ -626,13 +821,15 @@ function advanceDay() {
 
   addNews("NEW SESSION", `Trading day ${currentDay} has opened.`);
   showToast(`Trading day ${currentDay} opened`);
+  if (!goalDone && currentDay > GOAL_DAYS) finishGoal();
 }
 
 /* ===== SAVE / LOAD ===== */
 function saveGame() {
+  if (resetting) return;
   const data = {
-    cash, currentDay, marketSeconds, marketIndex, dayStartValue,
-    stocks: Object.fromEntries(Object.entries(stocks).map(([t, s]) => [t, {price: s.price, shares: s.shares}])),
+    cash, currentDay, marketSeconds, marketIndex, dayStartValue, trades, volMult, goalDone,
+    stocks: Object.fromEntries(Object.entries(stocks).map(([t, s]) => [t, {price: s.price, shares: s.shares, cost: s.cost}])),
     sessionStart,
     chartPoints
   };
@@ -663,6 +860,8 @@ function loadGame() {
         sessionStart[t] = sessionHigh[t] = sessionLow[t] = d.price;
       }
       if (Number.isInteger(d.shares) && d.shares >= 0) stocks[t].shares = d.shares;
+      if (Number.isFinite(d.cost) && d.cost >= 0) stocks[t].cost = d.cost;
+      if (stocks[t].shares > 0 && !(stocks[t].cost > 0)) stocks[t].cost = stocks[t].shares * stocks[t].price;
     }
     for (const t in data.sessionStart || {}) {
       if (stocks[t] && ok(data.sessionStart[t])) sessionStart[t] = data.sessionStart[t];
@@ -673,6 +872,9 @@ function loadGame() {
         chartPoints[t] = arr;
       }
     }
+    if (data.volMult > 0) volMult = data.volMult;
+    goalDone = !!data.goalDone;
+    if (Array.isArray(data.trades)) trades.push(...data.trades.slice(0, 30));
   } catch {
     console.warn("Save file could not be loaded.");
   }
@@ -696,10 +898,13 @@ function animationLoop(timestamp) {
   dt = Math.min(dt, 0.1);
   lastFrameTime = timestamp;
 
-  updateMarket(dt);
-  maybeGenerateNews(dt);
-  maybeMarketEvent(dt);
-  checkTradingDay();
+  const sdt = dt * speed;   // speed 0 = paused
+  if (sdt > 0) {
+    updateMarket(sdt);
+    maybeGenerateNews(sdt);
+    maybeMarketEvent(sdt);
+    checkTradingDay();
+  }
   drawChart();
 
   // text updates ~12 times per second is plenty
@@ -723,7 +928,13 @@ loadGame();
 addNews("MARKET OPEN", "The exchange is open. Prices are simulated and move continuously.");
 addNews("WELCOME", "Build your portfolio, manage risk and try to outperform the exchange.");
 
+document.getElementById("difficulty").value = String(volMult);
+const chartCanvas = document.getElementById("priceChart");
+chartCanvas.addEventListener("mousemove", e => { hoverX = e.clientX - chartCanvas.getBoundingClientRect().left; });
+chartCanvas.addEventListener("mouseleave", () => { hoverX = null; });
+
 buildWatchlist();
+renderTrades();
 selectStock("NVD");
 updatePortfolioUI();
 updateIndexUI();
